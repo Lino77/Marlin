@@ -1,6 +1,6 @@
 /**
  * Marlin 3D Printer Firmware
- * Copyright (c) 2019 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
+ * Copyright (c) 2020 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
  *
  * Based on Sprinter and grbl.
  * Copyright (c) 2011 Camiel Gubbels / Erik van der Zalm
@@ -31,7 +31,7 @@
  * -----------------
  *
  * Helpful G-code references:
- *  - http://marlinfw.org/meta/gcode
+ *  - https://marlinfw.org/meta/gcode
  *  - https://reprap.org/wiki/G-code
  *  - http://linuxcnc.org/docs/html/gcode.html
  *
@@ -67,6 +67,9 @@
  * G34  - Z Stepper automatic alignment using probe: I<iterations> T<accuracy> A<amplification> (Requires Z_STEPPER_AUTO_ALIGN)
  * G38  - Probe in any direction using the Z_MIN_PROBE (Requires G38_PROBE_TARGET)
  * G42  - Coordinated move to a mesh point (Requires MESH_BED_LEVELING, AUTO_BED_LEVELING_BLINEAR, or AUTO_BED_LEVELING_UBL)
+ * G60  - Save current position. (Requires SAVED_POSITIONS)
+ * G61  - Apply/restore saved coordinates. (Requires SAVED_POSITIONS)
+ * G76  - Calibrate first layer temperature offsets. (Requires PROBE_TEMP_COMPENSATION)
  * G80  - Cancel current motion mode (Requires GCODE_MOTION_MODES)
  * G90  - Use Absolute Coordinates
  * G91  - Use Relative Coordinates
@@ -132,7 +135,7 @@
  *        If AUTOTEMP is enabled, S<mintemp> B<maxtemp> F<factor>. Exit autotemp by any M109 without F
  * M110 - Set the current line number. (Used by host printing)
  * M111 - Set debug flags: "M111 S<flagbits>". See flag bits defined in enum.h.
- * M112 - Emergency stop.
+ * M112 - Full Shutdown.
  * M113 - Get or set the timeout interval for Host Keepalive "busy" messages. (Requires HOST_KEEPALIVE_FEATURE)
  * M114 - Report current position.
  * M115 - Report capabilities. (Extended capabilities requires EXTENDED_CAPABILITIES_REPORT)
@@ -177,6 +180,7 @@
  * M217 - Set filament swap parameters: "M217 S<length> P<feedrate> R<feedrate>". (Requires SINGLENOZZLE)
  * M218 - Set/get a tool offset: "M218 T<index> X<offset> Y<offset>". (Requires 2 or more extruders)
  * M220 - Set Feedrate Percentage: "M220 S<percent>" (i.e., "FR" on the LCD)
+ *        Use "M220 B" to back up the Feedrate Percentage and "M220 R" to restore it. (Requires PRUSA_MMU2)
  * M221 - Set Flow Percentage: "M221 S<percent>"
  * M226 - Wait until a pin is in a given state: "M226 P<pin> S<state>"
  * M240 - Trigger a camera to take a photograph. (Requires PHOTO_GCODE)
@@ -213,6 +217,7 @@
  * M422 - Set Z Stepper automatic alignment position using probe. X<units> Y<units> A<axis> (Requires Z_STEPPER_AUTO_ALIGN)
  * M425 - Enable/Disable and tune backlash correction. (Requires BACKLASH_COMPENSATION and BACKLASH_GCODE)
  * M428 - Set the home_offset based on the current_position. Nearest edge applies. (Disabled by NO_WORKSPACE_OFFSETS or DELTA)
+ * M486 - Identify and cancel objects. (Requires CANCEL_OBJECTS)
  * M500 - Store parameters in EEPROM. (Requires EEPROM_SETTINGS)
  * M501 - Restore parameters from EEPROM. (Requires EEPROM_SETTINGS)
  * M502 - Revert to the default "factory settings". ** Does not write them to EEPROM! **
@@ -225,11 +230,12 @@
  * M603 - Configure filament change: "M603 T<tool> U<unload_length> L<load_length>". (Requires ADVANCED_PAUSE_FEATURE)
  * M605 - Set Dual X-Carriage movement mode: "M605 S<mode> [X<x_offset>] [R<temp_offset>]". (Requires DUAL_X_CARRIAGE)
  * M665 - Set delta configurations: "M665 H<delta height> L<diagonal rod> R<delta radius> S<segments/s> B<calibration radius> X<Alpha angle trim> Y<Beta angle trim> Z<Gamma angle trim> (Requires DELTA)
- * M666 - Set/get offsets for delta (Requires DELTA) or dual endstops (Requires [XYZ]_DUAL_ENDSTOPS).
+ * M666 - Set/get offsets for delta (Requires DELTA) or dual endstops. (Requires [XYZ]_DUAL_ENDSTOPS)
+ * M672 - Set/Reset Duet Smart Effector's sensitivity. (Requires SMART_EFFECTOR and SMART_EFFECTOR_MOD_PIN)
  * M701 - Load filament (Requires FILAMENT_LOAD_UNLOAD_GCODES)
  * M702 - Unload filament (Requires FILAMENT_LOAD_UNLOAD_GCODES)
  * M810-M819 - Define/execute a G-code macro (Requires GCODE_MACROS)
- * M851 - Set Z probe's Z offset in current units. (Negative = below the nozzle.)
+ * M851 - Set Z probe's XYZ offsets in current units. (Negative values: X=left, Y=front, Z=below)
  * M852 - Set skew factors: "M852 [I<xy>] [J<xz>] [K<yz>]". (Requires SKEW_CORRECTION_GCODE, and SKEW_CORRECTION_FOR_Z for IJ)
  * M860 - Report the position of position encoder modules.
  * M861 - Report the status of position encoder modules.
@@ -241,6 +247,7 @@
  * M867 - Enable/disable or toggle error correction for position encoder modules.
  * M868 - Report or set position encoder module error correction threshold.
  * M869 - Report position encoder module error.
+ * M871 - Print/reset/clear first layer temperature offset values. (Requires PROBE_TEMP_COMPENSATION)
  * M876 - Handle Prompt Response. (Requires HOST_PROMPT_SUPPORT and not EMERGENCY_PARSER)
  * M900 - Get or Set Linear Advance K-factor. (Requires LIN_ADVANCE)
  * M906 - Set or get motor current in milliamps using axis codes X, Y, Z, E. Report values if no axis codes given. (Requires at least one _DRIVER_TYPE defined as TMC2130/2160/5130/5160/2208/2209/2660 or L6470)
@@ -280,15 +287,34 @@
 #include "parser.h"
 
 #if ENABLED(I2C_POSITION_ENCODERS)
-  #include "../feature/I2CPositionEncoder.h"
+  #include "../feature/encoder_i2c.h"
 #endif
+
+enum AxisRelative : uint8_t { REL_X, REL_Y, REL_Z, REL_E, E_MODE_ABS, E_MODE_REL };
 
 class GcodeSuite {
 public:
 
-  GcodeSuite() {}
+  static uint8_t axis_relative;
 
-  static bool axis_relative_modes[];
+  static inline bool axis_is_relative(const AxisEnum a) {
+    if (a == E_AXIS) {
+      if (TEST(axis_relative, E_MODE_REL)) return true;
+      if (TEST(axis_relative, E_MODE_ABS)) return false;
+    }
+    return TEST(axis_relative, a);
+  }
+  static inline void set_relative_mode(const bool rel) {
+    axis_relative = rel ? _BV(REL_X) | _BV(REL_Y) | _BV(REL_Z) | _BV(REL_E) : 0;
+  }
+  static inline void set_e_relative() {
+    CBI(axis_relative, E_MODE_ABS);
+    SBI(axis_relative, E_MODE_REL);
+  }
+  static inline void set_e_absolute() {
+    CBI(axis_relative, E_MODE_REL);
+    SBI(axis_relative, E_MODE_ABS);
+  }
 
   #if ENABLED(CNC_WORKSPACE_PLANES)
     /**
@@ -302,7 +328,7 @@ public:
   #define MAX_COORDINATE_SYSTEMS 9
   #if ENABLED(CNC_COORDINATE_SYSTEMS)
     static int8_t active_coordinate_system;
-    static float coordinate_system[MAX_COORDINATE_SYSTEMS][XYZ];
+    static xyz_pos_t coordinate_system[MAX_COORDINATE_SYSTEMS];
     static bool select_coordinate_system(const int8_t _new);
   #endif
 
@@ -320,7 +346,22 @@ public:
   static void process_subcommands_now_P(PGM_P pgcode);
   static void process_subcommands_now(char * gcode);
 
-  static inline void home_all_axes() { process_subcommands_now_P(PSTR("G28")); }
+  static inline void home_all_axes() {
+    extern const char G28_STR[];
+    process_subcommands_now_P(G28_STR);
+  }
+
+  #if EITHER(HAS_AUTO_REPORTING, HOST_KEEPALIVE_FEATURE)
+    static bool autoreport_paused;
+    static inline bool set_autoreport_paused(const bool p) {
+      const bool was = autoreport_paused;
+      autoreport_paused = p;
+      return was;
+    }
+  #else
+    static constexpr bool autoreport_paused = false;
+    static inline bool set_autoreport_paused(const bool) { return false; }
+  #endif
 
   #if ENABLED(HOST_KEEPALIVE_FEATURE)
     /**
@@ -351,28 +392,24 @@ private:
 
   static void G0_G1(
     #if IS_SCARA || defined(G0_FEEDRATE)
-      bool fast_move=false
+      const bool fast_move=false
     #endif
   );
 
-  #if ENABLED(ARC_SUPPORT)
-    static void G2_G3(const bool clockwise);
-  #endif
+  TERN_(ARC_SUPPORT, static void G2_G3(const bool clockwise));
 
   static void G4();
 
-  #if ENABLED(BEZIER_CURVE_SUPPORT)
-    static void G5();
-  #endif
+  TERN_(BEZIER_CURVE_SUPPORT, static void G5());
+
+  TERN_(DIRECT_STEPPING, static void G6());
 
   #if ENABLED(FWRETRACT)
     static void G10();
     static void G11();
   #endif
 
-  #if ENABLED(NOZZLE_CLEAN_FEATURE)
-    static void G12();
-  #endif
+  TERN_(NOZZLE_CLEAN_FEATURE, static void G12());
 
   #if ENABLED(CNC_WORKSPACE_PLANES)
     static void G17();
@@ -385,15 +422,11 @@ private:
     static void G21();
   #endif
 
-  #if ENABLED(G26_MESH_VALIDATION)
-    static void G26();
-  #endif
+  TERN_(G26_MESH_VALIDATION, static void G26());
 
-  #if ENABLED(NOZZLE_PARK_FEATURE)
-    static void G27();
-  #endif
+  TERN_(NOZZLE_PARK_FEATURE, static void G27());
 
-  static void G28(const bool always_home_all);
+  static void G28();
 
   #if HAS_LEVELING
     #if ENABLED(G29_RETRY_AND_RECOVER)
@@ -413,22 +446,16 @@ private:
     #endif
   #endif
 
-  #if ENABLED(DELTA_AUTO_CALIBRATION)
-    static void G33();
-  #endif
+  TERN_(DELTA_AUTO_CALIBRATION, static void G33());
 
   #if ENABLED(Z_STEPPER_AUTO_ALIGN)
     static void G34();
     static void M422();
   #endif
 
-  #if ENABLED(G38_PROBE_TARGET)
-    static void G38(const int8_t subcode);
-  #endif
+  TERN_(G38_PROBE_TARGET, static void G38(const int8_t subcode));
 
-  #if HAS_MESH
-    static void G42();
-  #endif
+  TERN_(HAS_MESH, static void G42());
 
   #if ENABLED(CNC_COORDINATE_SYSTEMS)
     static void G53();
@@ -440,19 +467,20 @@ private:
     static void G59();
   #endif
 
-  #if ENABLED(GCODE_MOTION_MODES)
-    static void G80();
+  TERN_(PROBE_TEMP_COMPENSATION, static void G76());
+
+  #if SAVED_POSITIONS
+    static void G60();
+    static void G61();
   #endif
+
+  TERN_(GCODE_MOTION_MODES, static void G80());
 
   static void G92();
 
-  #if ENABLED(CALIBRATION_GCODE)
-    static void G425();
-  #endif
+  TERN_(CALIBRATION_GCODE, static void G425());
 
-  #if HAS_RESUME_CONTINUE
-    static void M0_M1();
-  #endif
+  TERN_(HAS_RESUME_CONTINUE, static void M0_M1());
 
   #if HAS_CUTTER
     static void M3_M4(const bool is_M4);
@@ -460,22 +488,14 @@ private:
   #endif
 
   #if ENABLED(COOLANT_CONTROL)
-    #if ENABLED(COOLANT_MIST)
-      static void M7();
-    #endif
-    #if ENABLED(COOLANT_FLOOD)
-      static void M8();
-    #endif
+    TERN_(COOLANT_MIST, static void M7());
+    TERN_(COOLANT_FLOOD, static void M8());
     static void M9();
   #endif
 
-  #if ENABLED(EXTERNAL_CLOSED_LOOP_CONTROLLER)
-    static void M12();
-  #endif
+  TERN_(EXTERNAL_CLOSED_LOOP_CONTROLLER, static void M12());
 
-  #if ENABLED(EXPECTED_PRINTER_CHECK)
-    static void M16();
-  #endif
+  TERN_(EXPECTED_PRINTER_CHECK, static void M16());
 
   static void M17();
 
@@ -499,9 +519,7 @@ private:
 
   #if ENABLED(SDSUPPORT)
     static void M32();
-    #if ENABLED(LONG_FILENAME_HOST_SUPPORT)
-      static void M33();
-    #endif
+    TERN_(LONG_FILENAME_HOST_SUPPORT, static void M33());
     #if BOTH(SDCARD_SORT_ALPHA, SDSORT_GCODE)
       static void M34();
     #endif
@@ -509,29 +527,19 @@ private:
 
   static void M42();
 
-  #if ENABLED(PINS_DEBUGGING)
-    static void M43();
-  #endif
+  TERN_(PINS_DEBUGGING, static void M43());
 
-  #if ENABLED(Z_MIN_PROBE_REPEATABILITY_TEST)
-    static void M48();
-  #endif
+  TERN_(Z_MIN_PROBE_REPEATABILITY_TEST, static void M48());
 
-  #if ENABLED(LCD_SET_PROGRESS_MANUALLY)
-    static void M73();
-  #endif
+  TERN_(LCD_SET_PROGRESS_MANUALLY, static void M73());
 
   static void M75();
   static void M76();
   static void M77();
 
-  #if ENABLED(PRINTCOUNTER)
-    static void M78();
-  #endif
+  TERN_(PRINTCOUNTER, static void M78());
 
-  #if HAS_POWER_SWITCH
-    static void M80();
-  #endif
+  TERN_(PSU_CONTROL, static void M80());
 
   static void M81();
   static void M82();
@@ -539,32 +547,31 @@ private:
   static void M85();
   static void M92();
 
-  #if ENABLED(M100_FREE_MEMORY_WATCHER)
-    static void M100();
+  TERN_(M100_FREE_MEMORY_WATCHER, static void M100());
+
+  #if EXTRUDERS
+    static void M104();
+    static void M109();
   #endif
 
-  static void M104();
   static void M105();
-  static void M106();
-  static void M107();
+
+  #if HAS_FAN
+    static void M106();
+    static void M107();
+  #endif
 
   #if DISABLED(EMERGENCY_PARSER)
     static void M108();
     static void M112();
     static void M410();
-    #if ENABLED(HOST_PROMPT_SUPPORT)
-      static void M876();
-    #endif
+    TERN_(HOST_PROMPT_SUPPORT, static void M876());
   #endif
-
-  static void M109();
 
   static void M110();
   static void M111();
 
-  #if ENABLED(HOST_KEEPALIVE_FEATURE)
-    static void M113();
-  #endif
+  TERN_(HOST_KEEPALIVE_FEATURE, static void M113());
 
   static void M114();
   static void M115();
@@ -574,9 +581,7 @@ private:
   static void M120();
   static void M121();
 
-  #if ENABLED(PARK_HEAD_ON_PAUSE)
-    static void M125();
-  #endif
+  TERN_(PARK_HEAD_ON_PAUSE, static void M125());
 
   #if ENABLED(BARICUDA)
     #if HAS_HEATER_1
@@ -596,34 +601,26 @@ private:
 
   #if HAS_HEATED_CHAMBER
     static void M141();
-    //static void M191();
+    static void M191();
   #endif
 
-  #if HAS_LCD_MENU
+  #if HAS_HOTEND && HAS_LCD_MENU
     static void M145();
   #endif
 
-  #if ENABLED(TEMPERATURE_UNITS_SUPPORT)
-    static void M149();
-  #endif
+  TERN_(TEMPERATURE_UNITS_SUPPORT, static void M149());
 
-  #if HAS_COLOR_LEDS
-    static void M150();
-  #endif
+  TERN_(HAS_COLOR_LEDS, static void M150());
 
-  #if ENABLED(AUTO_REPORT_TEMPERATURES) && HAS_TEMP_SENSOR
+  #if BOTH(AUTO_REPORT_TEMPERATURES, HAS_TEMP_SENSOR)
     static void M155();
   #endif
 
   #if ENABLED(MIXING_EXTRUDER)
     static void M163();
     static void M164();
-    #if ENABLED(DIRECT_MIXING_IN_G1)
-      static void M165();
-    #endif
-    #if ENABLED(GRADIENT_MIX)
-      static void M166();
-    #endif
+    TERN_(DIRECT_MIXING_IN_G1, static void M165());
+    TERN_(GRADIENT_MIX, static void M166());
   #endif
 
   static void M200();
@@ -637,16 +634,12 @@ private:
   static void M204();
   static void M205();
 
-  #if HAS_M206_COMMAND
-    static void M206();
-  #endif
+  TERN_(HAS_M206_COMMAND, static void M206());
 
   #if ENABLED(FWRETRACT)
     static void M207();
     static void M208();
-    #if ENABLED(FWRETRACT_AUTORETRACT)
-      static void M209();
-    #endif
+    TERN_(FWRETRACT_AUTORETRACT, static void M209());
   #endif
 
   static void M211();
@@ -655,21 +648,19 @@ private:
     static void M217();
   #endif
 
-  #if HAS_HOTEND_OFFSET
-    static void M218();
-  #endif
+  TERN_(HAS_HOTEND_OFFSET, static void M218());
 
   static void M220();
-  static void M221();
+
+  #if EXTRUDERS
+    static void M221();
+  #endif
+
   static void M226();
 
-  #if ENABLED(PHOTO_GCODE)
-    static void M240();
-  #endif
+  TERN_(PHOTO_GCODE, static void M240());
 
-  #if HAS_LCD_CONTRAST
-    static void M250();
-  #endif
+  TERN_(HAS_LCD_CONTRAST, static void M250());
 
   #if ENABLED(EXPERIMENTAL_I2CBUS)
     static void M260();
@@ -678,47 +669,31 @@ private:
 
   #if HAS_SERVOS
     static void M280();
-    #if ENABLED(EDITABLE_SERVO_ANGLES)
-      static void M281();
-    #endif
+    TERN_(EDITABLE_SERVO_ANGLES, static void M281());
   #endif
 
-  #if ENABLED(BABYSTEPPING)
-    static void M290();
-  #endif
+  TERN_(BABYSTEPPING, static void M290());
 
-  #if HAS_BUZZER
-    static void M300();
-  #endif
+  TERN_(HAS_BUZZER, static void M300());
 
-  #if ENABLED(PIDTEMP)
-    static void M301();
-  #endif
+  TERN_(PIDTEMP, static void M301());
 
-  #if ENABLED(PREVENT_COLD_EXTRUSION)
-    static void M302();
-  #endif
+  TERN_(PREVENT_COLD_EXTRUSION, static void M302());
 
-  #if HAS_PID_HEATING
-    static void M303();
-  #endif
+  TERN_(HAS_PID_HEATING, static void M303());
 
-  #if ENABLED(PIDTEMPBED)
-    static void M304();
-  #endif
+  TERN_(PIDTEMPBED, static void M304());
 
-  #if HAS_USER_THERMISTORS
-    static void M305();
-  #endif
+  TERN_(HAS_USER_THERMISTORS, static void M305());
 
   #if HAS_MICROSTEPS
     static void M350();
     static void M351();
   #endif
 
-  #if HAS_CASE_LIGHT
-    static void M355();
-  #endif
+  TERN_(HAS_CASE_LIGHT, static void M355());
+
+  TERN_(REPETIER_GCODE_M360, static void M360());
 
   #if ENABLED(MORGAN_SCARA)
     static bool M360();
@@ -740,9 +715,7 @@ private:
     static void M402();
   #endif
 
-  #if ENABLED(PRUSA_MMU2)
-    static void M403();
-  #endif
+  TERN_(PRUSA_MMU2, static void M403());
 
   #if ENABLED(FILAMENT_WIDTH_SENSOR)
     static void M404();
@@ -751,22 +724,18 @@ private:
     static void M407();
   #endif
 
-  #if HAS_FILAMENT_SENSOR
-    static void M412();
-  #endif
+  TERN_(HAS_FILAMENT_SENSOR, static void M412());
 
   #if HAS_LEVELING
     static void M420();
     static void M421();
   #endif
 
-  #if ENABLED(BACKLASH_GCODE)
-    static void M425();
-  #endif
+  TERN_(BACKLASH_GCODE, static void M425());
 
-  #if HAS_M206_COMMAND
-    static void M428();
-  #endif
+  TERN_(HAS_M206_COMMAND, static void M428());
+
+  TERN_(CANCEL_OBJECTS, static void M486());
 
   static void M500();
   static void M501();
@@ -774,37 +743,29 @@ private:
   #if DISABLED(DISABLE_M503)
     static void M503();
   #endif
-  #if ENABLED(EEPROM_SETTINGS)
-    static void M504();
-  #endif
+  TERN_(EEPROM_SETTINGS, static void M504());
 
-  #if ENABLED(SDSUPPORT)
-    static void M524();
-  #endif
+  TERN_(SDSUPPORT, static void M524());
 
-  #if ENABLED(SD_ABORT_ON_ENDSTOP_HIT)
-    static void M540();
-  #endif
+  TERN_(SD_ABORT_ON_ENDSTOP_HIT, static void M540());
 
-  #if ENABLED(BAUD_RATE_GCODE)
-    static void M575();
-  #endif
+  TERN_(BAUD_RATE_GCODE, static void M575());
 
   #if ENABLED(ADVANCED_PAUSE_FEATURE)
     static void M600();
     static void M603();
   #endif
 
-  #if HAS_DUPLICATION_MODE
-    static void M605();
-  #endif
+  TERN_(HAS_DUPLICATION_MODE, static void M605());
 
-  #if IS_KINEMATIC
-    static void M665();
-  #endif
+  TERN_(IS_KINEMATIC, static void M665());
 
   #if ENABLED(DELTA) || HAS_EXTRA_ENDSTOPS
     static void M666();
+  #endif
+
+  #if ENABLED(SMART_EFFECTOR) && PIN_EXISTS(SMART_EFFECTOR_MOD)
+    static void M672();
   #endif
 
   #if ENABLED(FILAMENT_LOAD_UNLOAD_GCODES)
@@ -812,17 +773,11 @@ private:
     static void M702();
   #endif
 
-  #if ENABLED(GCODE_MACROS)
-    static void M810_819();
-  #endif
+  TERN_(GCODE_MACROS, static void M810_819());
 
-  #if HAS_BED_PROBE
-    static void M851();
-  #endif
+  TERN_(HAS_BED_PROBE, static void M851());
 
-  #if ENABLED(SKEW_CORRECTION_GCODE)
-    static void M852();
-  #endif
+  TERN_(SKEW_CORRECTION_GCODE, static void M852());
 
   #if ENABLED(I2C_POSITION_ENCODERS)
     FORCE_INLINE static void M860() { I2CPEM.M860(); }
@@ -837,29 +792,23 @@ private:
     FORCE_INLINE static void M869() { I2CPEM.M869(); }
   #endif
 
-  #if ENABLED(LIN_ADVANCE)
-    static void M900();
-  #endif
+  TERN_(PROBE_TEMP_COMPENSATION, static void M871());
 
-  #if HAS_TRINAMIC
+  TERN_(LIN_ADVANCE, static void M900());
+
+  #if HAS_TRINAMIC_CONFIG
     static void M122();
     static void M906();
-    #if HAS_STEALTHCHOP
-      static void M569();
-    #endif
+    TERN_(HAS_STEALTHCHOP, static void M569());
     #if ENABLED(MONITOR_DRIVER_STATUS)
       static void M911();
       static void M912();
     #endif
-    #if ENABLED(HYBRID_THRESHOLD)
-      static void M913();
-    #endif
-    #if USE_SENSORLESS
-      static void M914();
-    #endif
+    TERN_(HYBRID_THRESHOLD, static void M913());
+    TERN_(USE_SENSORLESS, static void M914());
   #endif
 
-  #if HAS_DRIVER(L6470)
+  #if HAS_L64XX
     static void M122();
     static void M906();
     static void M916();
@@ -867,9 +816,9 @@ private:
     static void M918();
   #endif
 
-  #if HAS_DIGIPOTSS || HAS_MOTOR_CURRENT_PWM || EITHER(DIGIPOT_I2C, DAC_STEPPER_CURRENT)
+  #if ANY(HAS_DIGIPOTSS, HAS_MOTOR_CURRENT_PWM, HAS_I2C_DIGIPOT, DAC_STEPPER_CURRENT)
     static void M907();
-    #if HAS_DIGIPOTSS || ENABLED(DAC_STEPPER_CURRENT)
+    #if EITHER(HAS_DIGIPOTSS, DAC_STEPPER_CURRENT)
       static void M908();
       #if ENABLED(DAC_STEPPER_CURRENT)
         static void M909();
@@ -878,17 +827,11 @@ private:
     #endif
   #endif
 
-  #if ENABLED(SDSUPPORT)
-    static void M928();
-  #endif
+  TERN_(SDSUPPORT, static void M928());
 
-  #if ENABLED(MAGNETIC_PARKING_EXTRUDER)
-    static void M951();
-  #endif
+  TERN_(MAGNETIC_PARKING_EXTRUDER, static void M951());
 
-  #if ENABLED(PLATFORM_M997_SUPPORT)
-    static void M997();
-  #endif
+  TERN_(PLATFORM_M997_SUPPORT, static void M997());
 
   static void M999();
 
@@ -897,9 +840,11 @@ private:
     static void M1000();
   #endif
 
-  #if ENABLED(MAX7219_GCODE)
-    static void M7219();
-  #endif
+  TERN_(SDSUPPORT, static void M1001());
+
+  TERN_(MAX7219_GCODE, static void M7219());
+
+  TERN_(CONTROLLER_FAN_EDITABLE, static void M710());
 
   static void T(const uint8_t tool_index);
 
