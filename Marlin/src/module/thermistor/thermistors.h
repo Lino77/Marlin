@@ -148,6 +148,9 @@
 #if ANY_THERMISTOR_IS(99) // 100k bed thermistor with a 10K pull-up resistor (on some Wanhao i3 models)
   #include "thermistor_99.h"
 #endif
+#if ANY_THERMISTOR_IS(104) // TDK NTCG104 with 4k7 pullup
+  #include "thermistor_104.h"
+#endif
 #if ANY_THERMISTOR_IS(110) // Pt100 with 1k0 pullup
   #include "thermistor_110.h"
 #endif
