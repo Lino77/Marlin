@@ -45,11 +45,33 @@
 //#define BOGUS_TEMPERATURE_GRACE_PERIOD 2000
 
 //
+// Trinamic Stallguard pins
+//
+#define X_DIAG_PIN                          PD3  // X-
+#define Y_DIAG_PIN                          PD2  // Y-
+#define Z_DIAG_PIN                          PD1  // Z- // Shares J4 connector with PC3
+#define E0_DIAG_PIN                         PD0  // E0
+
+//
 // Limit Switches
 //
-#define X_STOP_PIN                          PD3
-#define Y_STOP_PIN                          PD2
-#define Z_STOP_PIN                          PD1   // Shares J4 connector with PC3
+#ifdef X_STALL_SENSITIVITY
+  #define X_STOP_PIN                  X_DIAG_PIN
+#else
+  #define X_MIN_PIN                         PD3  // X-
+#endif
+
+#ifdef Y_STALL_SENSITIVITY
+  #define Y_STOP_PIN                  Y_DIAG_PIN
+#else
+  #define Y_MIN_PIN                         PD2  // Y-
+#endif
+
+#ifdef Z_STALL_SENSITIVITY
+  #define Z_STOP_PIN                  Z_DIAG_PIN
+#else
+  #define Z_MIN_PIN                         PD1  // Z-
+#endif
 
 //
 // Z Probe must be this pin
@@ -163,7 +185,7 @@
 #define TEMP_1_PIN                          PA0   // T1 <-> E1
 #define TEMP_BED_PIN                        PA1   // T2 <-> Bed
 #define TEMP_PROBE_PIN                      PC3   // Shares J4 connector with PD1
-
+#define TEMP_CHAMBER_PIN                    PC2   // Temp NTCG104LH104JT1
 //
 // Heaters / Fans
 //
